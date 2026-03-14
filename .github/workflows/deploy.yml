@@ -1,11 +1,10 @@
-name: Auto-Deploy Revenue Systems
+name: Master Auto-Deploy Revenue System
 
 on:
   push:
     branches: [ main ]
-    paths:
-      - 'scripts/**'
-      - '.github/workflows/**'
+  schedule:
+    - cron: '0 6 * * *'   # Daily at 06:00 UTC
   workflow_dispatch:
     inputs:
       deploy_target:
@@ -15,61 +14,75 @@ on:
         type: choice
         options:
           - railway
+          - render
           - vercel
           - kubernetes
 
 jobs:
-  deploy-all-systems:
+  test:
+    name: Run bash test suite
     runs-on: ubuntu-latest
-    
+    permissions:
+      contents: read
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      
+
+      - name: Run test suite
+        run: |
+          chmod +x tests/test_deploy.sh
+          ./tests/test_deploy.sh
+
+  deploy-all-systems:
+    name: Deploy all revenue systems
+    runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Set up deployment environment
         run: |
-          chmod +x scripts/autodeploy-revenue-systems.sh
-      
-      - name: Deploy to Railway
-        if: github.event.inputs.deploy_target == 'railway' || github.event.inputs.deploy_target == ''
+          chmod +x deploy.sh scripts/autodeploy-revenue-systems.sh
+
+      - name: Install Railway CLI
+        if: ${{ github.event.inputs.deploy_target == 'railway' || github.event.inputs.deploy_target == '' }}
+        run: npm install -g @railway/cli
+
+      - name: Install Vercel CLI
+        if: ${{ github.event.inputs.deploy_target == 'vercel' }}
+        run: npm install -g vercel
+
+      - name: Deploy all systems
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: |
-          npm install -g @railway/cli
-          ./scripts/autodeploy-revenue-systems.sh railway
-      
-      - name: Deploy to Vercel
-        env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          npm install -g vercel
-          ./scripts/autodeploy-revenue-systems.sh vercel
-      
-      - name: Deploy to Kubernetes
-        env:
-          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
-        run: |
-          echo "$KUBE_CONFIG" > ~/.kube/config
-          ./scripts/autodeploy-revenue-systems.sh kubernetes
-      
-      - name: Notify deployment status
+          ./deploy.sh "${{ github.event.inputs.deploy_target || 'railway' }}"
+
+      - name: Upload deploy logs
         if: always()
-        run: |
-          echo "Deployment completed!"
-          echo "Platform: ${{ github.event.inputs.deploy_target || 'railway' }}"
-          echo "Commit: ${{ github.sha }}"
-          echo "Status: ${{ job.status }}"
-      
-      - name: Post deployment health check
-        run: |
-          echo "Running health checks on deployed systems..."
-          echo "All revenue systems are online and generating income!"
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-logs-${{ github.run_number }}
+          path: .deploy-logs/
+          retention-days: 30
 
   setup-monitoring:
+    name: Configure monitoring
     runs-on: ubuntu-latest
     needs: deploy-all-systems
     if: success()
-    
+    permissions: {}
+
     steps:
       - name: Configure monitoring
         run: |
@@ -77,9 +90,8 @@ jobs:
           echo "Revenue tracking: ENABLED"
           echo "Error monitoring: ENABLED"
           echo "Performance metrics: ENABLED"
-      
+
       - name: Setup billing webhooks
         run: |
           echo "Configuring Stripe webhooks..."
-          echo "Configuring Paddle webhooks..."
           echo "Billing automation: ACTIVE"
