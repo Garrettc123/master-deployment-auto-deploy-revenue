@@ -1,0 +1,83 @@
+name: Railway Auto-Provision & Deploy All Services
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '*/15 * * * *'  # Every 15 minutes
+  workflow_dispatch:
+
+jobs:
+  auto-provision-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Auto-provision and deploy all repos as Railway services
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_OWNER: Garrettc123
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "RAILWAY_TOKEN not set — skipping Railway steps"
+            exit 0
+          fi
+
+          # Get all repos for the account
+          echo "Fetching all repos..."
+          REPOS=$(gh repo list $GITHUB_OWNER --limit 100 --json name,url --jq '.[].name' 2>/dev/null || echo "")
+
+          if [ -z "$REPOS" ]; then
+            echo "No repos found or GH_TOKEN insufficient"
+            exit 0
+          fi
+
+          echo "Found repos:"
+          echo "$REPOS"
+
+          # For each repo, attempt to link + deploy via Railway
+          SUCCESS=0
+          SKIP=0
+
+          while IFS= read -r REPO; do
+            if [ -z "$REPO" ]; then continue; fi
+
+            echo ""
+            echo "=== Processing: $REPO ==="
+
+            # Try to redeploy existing service first
+            if railway redeploy --service "$REPO" --yes 2>/dev/null; then
+              echo "  REDEPLOYED: $REPO"
+              SUCCESS=$((SUCCESS + 1))
+            else
+              # Service doesn't exist yet — create it from GitHub repo
+              echo "  Creating new Railway service for: $REPO"
+              if railway service create --name "$REPO" 2>/dev/null; then
+                echo "  CREATED: $REPO"
+                # Link the GitHub repo as source
+                railway link --repo "$GITHUB_OWNER/$REPO" --service "$REPO" 2>/dev/null || true
+                # Trigger initial deploy
+                railway up --service "$REPO" --detach 2>/dev/null || true
+                SUCCESS=$((SUCCESS + 1))
+              else
+                echo "  SKIP: $REPO (may already exist or not deployable)"
+                SKIP=$((SKIP + 1))
+              fi
+            fi
+          done <<< "$REPOS"
+
+          echo ""
+          echo "=== AUTO-PROVISION COMPLETE ==="
+          echo "Deployed/Updated: $SUCCESS"
+          echo "Skipped: $SKIP"
+          echo "Timestamp: $(date -u)"
