@@ -1,0 +1,86 @@
+name: Auto-Bootstrap Railway Token
+
+on:
+  workflow_dispatch:
+    inputs:
+      railway_token:
+        description: 'Paste your Railway API token here (get from https://railway.app/account/tokens)'
+        required: true
+        type: string
+
+jobs:
+  bootstrap-token:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Add RAILWAY_TOKEN to repo secrets via GitHub API
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RAILWAY_TOKEN_INPUT: ${{ github.event.inputs.railway_token }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "Fetching repo public key for secret encryption..."
+
+          # Get the repo public key
+          KEY_RESPONSE=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/actions/secrets/public-key")
+
+          KEY_ID=$(echo "$KEY_RESPONSE" | jq -r '.key_id')
+          PUBLIC_KEY=$(echo "$KEY_RESPONSE" | jq -r '.key')
+
+          echo "Key ID: $KEY_ID"
+
+          # Encrypt the secret using libsodium (Python)
+          pip install PyNaCl -q 2>/dev/null
+
+          ENCRYPTED=$(python3 - <<EOF
+import base64
+from nacl import encoding, public
+
+def encrypt_secret(public_key_b64: str, secret_value: str) -> str:
+    public_key = public.PublicKey(public_key_b64.encode("utf-8"), encoding.Base64Encoder())
+    sealed_box = public.SealedBox(public_key)
+    encrypted = sealed_box.encrypt(secret_value.encode("utf-8"))
+    return base64.b64encode(encrypted).decode("utf-8")
+
+print(encrypt_secret("$PUBLIC_KEY", "$RAILWAY_TOKEN_INPUT"))
+EOF
+          )
+
+          echo "Encrypted secret generated. Setting RAILWAY_TOKEN secret..."
+
+          # Set the secret via GitHub API
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X PUT \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/actions/secrets/RAILWAY_TOKEN" \
+            -d "{\"encrypted_value\":\"$ENCRYPTED\",\"key_id\":\"$KEY_ID\"}")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+
+          if [ "$HTTP_CODE" = "201" ] || [ "$HTTP_CODE" = "204" ]; then
+            echo ""
+            echo "SUCCESS: RAILWAY_TOKEN secret has been set automatically!"
+            echo "All Railway auto-deploy workflows will now work."
+            echo "Triggering Railway auto-provision now..."
+          else
+            echo "ERROR: Failed to set secret. HTTP $HTTP_CODE"
+            echo "Response: $RESPONSE"
+            exit 1
+          fi
+
+      - name: Trigger Railway auto-provision immediately
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          curl -s -X POST \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/actions/workflows/railway-auto-provision.yml/dispatches" \
+            -d '{"ref":"main"}'
+          echo "Railway auto-provision triggered."
