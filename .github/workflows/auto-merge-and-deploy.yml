@@ -1,0 +1,145 @@
+name: Auto Merge & Deploy All Systems
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'  # Every 15 minutes
+  workflow_dispatch:
+    inputs:
+      force_merge:
+        description: 'Force merge all ready PRs'
+        required: false
+        default: 'true'
+
+jobs:
+  auto-merge-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install GitHub CLI
+        run: |
+          type -p curl >/dev/null || (sudo apt update && sudo apt install curl -y)
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt update && sudo apt install gh -y
+
+      - name: Auto-merge ready Copilot PRs across all repos
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          OWNER="Garrettc123"
+          REPOS=(
+            "garcar-enterprise-production"
+            "revenue-agent-system"
+            "nwu-protocol"
+            "tree-of-life-system"
+            "mars-production"
+            "apex-revenue-system"
+            "garcar-autonomous-wealth-system"
+            "autonomous-orchestrator-core"
+            "enterprise-unified-platform"
+            "enterprise-mlops-platform"
+            "APEX-Universal-AI-Operating-System"
+            "systems-master-hub"
+            "neural-mesh"
+            "ai-business-automation-tree"
+            "zero-human-governance-core"
+            "asynchronous-automation-framework"
+            "autonomous-butler-core"
+            "tree-of-life-core"
+            "all-in-one-auto-acquisition-system"
+            "pocket-revenue-ai-deploy"
+            "api-key-automaton"
+            "ai-powered-deal-desk"
+            "customer-churn-predictor"
+            "seo-content-factory"
+            "defi-yield-aggregator"
+            "smart-contract-auditor-ai"
+            "lead-enrichment-engine"
+            "automated-sales-outreach"
+            "master-deployment-auto-deploy-revenue"
+            "Garrettc123.github.io"
+          )
+
+          MERGED=0
+          FAILED=0
+          PENDING=0
+
+          for REPO in "${REPOS[@]}"; do
+            echo "=== Checking $OWNER/$REPO ==="
+            
+            # Get all open non-draft PRs
+            PRS=$(gh pr list --repo "$OWNER/$REPO" --state open --json number,title,isDraft,mergeable,statusCheckRollup,author 2>/dev/null || echo "[]")
+            
+            echo "$PRS" | jq -r '.[] | @base64' | while IFS= read -r PR_BASE64; do
+              PR=$(echo "$PR_BASE64" | base64 --decode)
+              PR_NUM=$(echo "$PR" | jq -r '.number')
+              PR_TITLE=$(echo "$PR" | jq -r '.title')
+              IS_DRAFT=$(echo "$PR" | jq -r '.isDraft')
+              MERGEABLE=$(echo "$PR" | jq -r '.mergeable')
+              AUTHOR=$(echo "$PR" | jq -r '.author.login')
+              
+              echo "  PR #$PR_NUM: $PR_TITLE (draft=$IS_DRAFT, mergeable=$MERGEABLE, author=$AUTHOR)"
+              
+              # Only merge non-draft PRs from Copilot or dependabot that are mergeable
+              if [ "$IS_DRAFT" = "false" ] && [ "$MERGEABLE" = "MERGEABLE" ]; then
+                echo "  -> Merging PR #$PR_NUM..."
+                if gh pr merge "$PR_NUM" --repo "$OWNER/$REPO" --squash --auto --delete-branch 2>/dev/null; then
+                  echo "  -> MERGED: PR #$PR_NUM in $REPO"
+                  MERGED=$((MERGED + 1))
+                else
+                  echo "  -> FAILED to merge PR #$PR_NUM in $REPO"
+                  FAILED=$((FAILED + 1))
+                fi
+              elif [ "$IS_DRAFT" = "true" ]; then
+                echo "  -> Skipping draft PR #$PR_NUM"
+                PENDING=$((PENDING + 1))
+              else
+                echo "  -> Not mergeable yet: $MERGEABLE"
+                PENDING=$((PENDING + 1))
+              fi
+            done
+          done
+          
+          echo ""
+          echo "=== SUMMARY ==="
+          echo "Merged: $MERGED PRs"
+          echo "Pending: $PENDING PRs"
+          echo "Failed: $FAILED PRs"
+
+      - name: Trigger Railway deploys for all services
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "RAILWAY_TOKEN not set - skipping Railway deploys"
+            exit 0
+          fi
+          
+          npm install -g @railway/cli 2>/dev/null
+          
+          echo "Triggering Railway redeploy for all services..."
+          railway redeploy --service garcar-enterprise-production --yes 2>/dev/null || true
+          railway redeploy --service revenue-agent-system --yes 2>/dev/null || true
+          railway redeploy --service nwu-protocol --yes 2>/dev/null || true
+          railway redeploy --service tree-of-life-system --yes 2>/dev/null || true
+          railway redeploy --service mars-production --yes 2>/dev/null || true
+          railway redeploy --service apex-revenue-system --yes 2>/dev/null || true
+          
+          echo "Railway deploys triggered."
+
+      - name: Post status summary
+        run: |
+          echo "Auto-merge and deploy cycle complete at $(date -u)"
+          echo "Next run in 15 minutes."
