@@ -36,19 +36,8 @@ jobs:
           # Encrypt the secret using libsodium (Python)
           pip install PyNaCl -q 2>/dev/null
 
-          ENCRYPTED=$(python3 - <<EOF
-import base64
-from nacl import encoding, public
-
-def encrypt_secret(public_key_b64: str, secret_value: str) -> str:
-    public_key = public.PublicKey(public_key_b64.encode("utf-8"), encoding.Base64Encoder())
-    sealed_box = public.SealedBox(public_key)
-    encrypted = sealed_box.encrypt(secret_value.encode("utf-8"))
-    return base64.b64encode(encrypted).decode("utf-8")
-
-print(encrypt_secret("$PUBLIC_KEY", "$RAILWAY_TOKEN_INPUT"))
-EOF
-          )
+          ENCRYPTED=$(PUBLIC_KEY="$PUBLIC_KEY" SECRET_VALUE="$RAILWAY_TOKEN_INPUT" \
+            python3 .github/scripts/encrypt_secret.py)
 
           echo "Encrypted secret generated. Setting RAILWAY_TOKEN secret..."
 
