@@ -1,0 +1,89 @@
+name: Railway Auto-Deploy All Services
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
+  workflow_dispatch:
+    inputs:
+      service:
+        description: 'Specific service to deploy (leave empty for all)'
+        required: false
+        default: ''
+
+jobs:
+  railway-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy all services to Railway
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "ERROR: RAILWAY_TOKEN secret not set."
+            echo "Go to: https://github.com/Garrettc123/master-deployment-auto-deploy-revenue/settings/secrets/actions"
+            echo "Add secret: RAILWAY_TOKEN = your Railway API token"
+            echo "Get your token at: https://railway.app/account/tokens"
+            exit 1
+          fi
+
+          SERVICES=(
+            "garcar-enterprise-production"
+            "revenue-agent-system"
+            "nwu-protocol"
+            "tree-of-life-system"
+            "mars-production"
+            "apex-revenue-system"
+            "garcar-autonomous-wealth-system"
+            "autonomous-orchestrator-core"
+            "enterprise-mlops-platform"
+            "ai-powered-deal-desk"
+            "customer-churn-predictor"
+            "seo-content-factory"
+            "defi-yield-aggregator"
+            "smart-contract-auditor-ai"
+            "lead-enrichment-engine"
+            "automated-sales-outreach"
+            "neural-mesh"
+            "zero-human-governance-core"
+            "ai-business-automation-tree"
+            "autonomous-butler-core"
+            "asynchronous-automation-framework"
+            "all-in-one-auto-acquisition-system"
+            "pocket-revenue-ai-deploy"
+            "api-key-automaton"
+            "tree-of-life-core"
+          )
+
+          TARGET="${{ github.event.inputs.service }}"
+
+          if [ -n "$TARGET" ]; then
+            echo "Deploying single service: $TARGET"
+            railway redeploy --service "$TARGET" --yes
+          else
+            echo "Deploying ALL ${#SERVICES[@]} services..."
+            for SERVICE in "${SERVICES[@]}"; do
+              echo "-> $SERVICE"
+              railway redeploy --service "$SERVICE" --yes 2>/dev/null || echo "  SKIP: $SERVICE"
+            done
+          fi
+
+          echo "Railway deploy sweep complete."
+
+  notify-status:
+    runs-on: ubuntu-latest
+    needs: railway-deploy
+    if: always()
+    steps:
+      - name: Post deploy status
+        run: |
+          STATUS="${{ needs.railway-deploy.result }}"
+          echo "Deploy job result: $STATUS"
+          echo "Completed at: $(date -u)"
