@@ -8,6 +8,10 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: read
+  secrets: write
+
 jobs:
   bootstrap-token:
     runs-on: ubuntu-latest
@@ -29,24 +33,36 @@ jobs:
             "https://api.github.com/repos/$REPO/actions/secrets/public-key")
 
           KEY_ID=$(echo "$KEY_RESPONSE" | jq -r '.key_id')
-          PUBLIC_KEY=$(echo "$KEY_RESPONSE" | jq -r '.key')
+          export PUBLIC_KEY=$(echo "$KEY_RESPONSE" | jq -r '.key')
 
           echo "Key ID: $KEY_ID"
 
           # Encrypt the secret using libsodium (Python)
           pip install PyNaCl -q 2>/dev/null
 
-          ENCRYPTED=$(python3 - <<EOF
+          ENCRYPTED=$(python3 - <<'EOF'
 import base64
+import os
+import sys
 from nacl import encoding, public
 
+repo_public_key = os.environ.get("PUBLIC_KEY")
+railway_token = os.environ.get("RAILWAY_TOKEN_INPUT")
+
+if not repo_public_key:
+    print("ERROR: PUBLIC_KEY environment variable is not set", file=sys.stderr)
+    sys.exit(1)
+if not railway_token:
+    print("ERROR: RAILWAY_TOKEN_INPUT environment variable is not set", file=sys.stderr)
+    sys.exit(1)
+
 def encrypt_secret(public_key_b64: str, secret_value: str) -> str:
-    public_key = public.PublicKey(public_key_b64.encode("utf-8"), encoding.Base64Encoder())
-    sealed_box = public.SealedBox(public_key)
+    pub_key = public.PublicKey(public_key_b64.encode("utf-8"), encoding.Base64Encoder())
+    sealed_box = public.SealedBox(pub_key)
     encrypted = sealed_box.encrypt(secret_value.encode("utf-8"))
     return base64.b64encode(encrypted).decode("utf-8")
 
-print(encrypt_secret("$PUBLIC_KEY", "$RAILWAY_TOKEN_INPUT"))
+print(encrypt_secret(repo_public_key, railway_token))
 EOF
           )
 
