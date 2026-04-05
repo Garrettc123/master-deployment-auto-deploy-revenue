@@ -2,7 +2,7 @@ name: Auto Merge & Deploy All Systems
 
 on:
   schedule:
-    - cron: '*/15 * * * *'  # Every 15 minutes
+    - cron: '17 8 * * *'  # Once daily at 08:17 UTC
   workflow_dispatch:
     inputs:
       force_merge:
@@ -16,22 +16,10 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-    
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install GitHub CLI
-        run: |
-          type -p curl >/dev/null || (sudo apt update && sudo apt install curl -y)
-          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-          sudo apt update && sudo apt install gh -y
 
       - name: Auto-merge ready Copilot PRs across all repos
         env:
@@ -78,10 +66,10 @@ jobs:
 
           for REPO in "${REPOS[@]}"; do
             echo "=== Checking $OWNER/$REPO ==="
-            
+
             # Get all open non-draft PRs
             PRS=$(gh pr list --repo "$OWNER/$REPO" --state open --json number,title,isDraft,mergeable,statusCheckRollup,author 2>/dev/null || echo "[]")
-            
+
             echo "$PRS" | jq -r '.[] | @base64' | while IFS= read -r PR_BASE64; do
               PR=$(echo "$PR_BASE64" | base64 --decode)
               PR_NUM=$(echo "$PR" | jq -r '.number')
@@ -89,9 +77,9 @@ jobs:
               IS_DRAFT=$(echo "$PR" | jq -r '.isDraft')
               MERGEABLE=$(echo "$PR" | jq -r '.mergeable')
               AUTHOR=$(echo "$PR" | jq -r '.author.login')
-              
+
               echo "  PR #$PR_NUM: $PR_TITLE (draft=$IS_DRAFT, mergeable=$MERGEABLE, author=$AUTHOR)"
-              
+
               # Only merge non-draft PRs from Copilot or dependabot that are mergeable
               if [ "$IS_DRAFT" = "false" ] && [ "$MERGEABLE" = "MERGEABLE" ]; then
                 echo "  -> Merging PR #$PR_NUM..."
@@ -111,7 +99,7 @@ jobs:
               fi
             done
           done
-          
+
           echo ""
           echo "=== SUMMARY ==="
           echo "Merged: $MERGED PRs"
@@ -123,12 +111,12 @@ jobs:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           if [ -z "$RAILWAY_TOKEN" ]; then
-            echo "RAILWAY_TOKEN not set - skipping Railway deploys"
+            echo "⚠️ RAILWAY_TOKEN not configured — skipping Railway deploys"
             exit 0
           fi
-          
+
           npm install -g @railway/cli 2>/dev/null
-          
+
           echo "Triggering Railway redeploy for all services..."
           railway redeploy --service garcar-enterprise-production --yes 2>/dev/null || true
           railway redeploy --service revenue-agent-system --yes 2>/dev/null || true
@@ -136,10 +124,9 @@ jobs:
           railway redeploy --service tree-of-life-system --yes 2>/dev/null || true
           railway redeploy --service mars-production --yes 2>/dev/null || true
           railway redeploy --service apex-revenue-system --yes 2>/dev/null || true
-          
+
           echo "Railway deploys triggered."
 
       - name: Post status summary
         run: |
           echo "Auto-merge and deploy cycle complete at $(date -u)"
-          echo "Next run in 15 minutes."

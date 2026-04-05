@@ -3,8 +3,6 @@ name: Railway Auto-Provision & Deploy All Services
 on:
   push:
     branches: [main]
-  schedule:
-    - cron: '*/15 * * * *'  # Every 15 minutes
   workflow_dispatch:
 
 jobs:
@@ -14,25 +12,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Check RAILWAY_TOKEN
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "⚠️ RAILWAY_TOKEN not configured — skipping Railway provision"
+            echo "Add your token at: https://github.com/Garrettc123/master-deployment-auto-deploy-revenue/settings/secrets/actions"
+            exit 0
+          fi
+          echo "HAS_TOKEN=true" >> "$GITHUB_ENV"
+
       - name: Setup Node
+        if: env.HAS_TOKEN == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
       - name: Install Railway CLI
+        if: env.HAS_TOKEN == 'true'
         run: npm install -g @railway/cli
 
       - name: Auto-provision and deploy all repos as Railway services
+        if: env.HAS_TOKEN == 'true'
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_OWNER: Garrettc123
         run: |
-          if [ -z "$RAILWAY_TOKEN" ]; then
-            echo "RAILWAY_TOKEN not set — skipping Railway steps"
-            exit 0
-          fi
-
           # Get all repos for the account
           echo "Fetching all repos..."
           REPOS=$(gh repo list $GITHUB_OWNER --limit 100 --json name,url --jq '.[].name' 2>/dev/null || echo "")
